@@ -17,6 +17,7 @@ type cloneResultMsg struct {
 	output   string
 	err      error
 	duration time.Duration
+	build    buildResult
 }
 
 func cloneRepository(repo repository, parent string) tea.Cmd {
@@ -35,12 +36,17 @@ func cloneRepository(repo repository, parent string) tea.Cmd {
 		cmd.Stdout = &output
 		cmd.Stderr = &output
 		err := cmd.Run()
+		build := buildResult{skipped: true}
+		if err == nil {
+			build = buildRepository(target)
+		}
 
 		return cloneResultMsg{
 			target:   target,
 			output:   strings.TrimSpace(output.String()),
 			err:      err,
 			duration: time.Since(started),
+			build:    build,
 		}
 	}
 }
