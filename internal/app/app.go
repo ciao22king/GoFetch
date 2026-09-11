@@ -138,10 +138,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.urlInput.Width = min(70, max(35, msg.Width-16))
 		m.dirInput.Width = m.urlInput.Width
 		return m, nil
+	case clipboardMsg:
+		if msg.err != nil {
+			m.status = "Clipboard non disponibile: " + compactError(msg.err)
+			return m, nil
+		}
+		if strings.TrimSpace(msg.value) == "" {
+			m.status = "La clipboard è vuota."
+			return m, nil
+		}
+		switch m.screen {
+		case urlScreen:
+			m.urlInput.SetValue(strings.TrimSpace(msg.value))
+			m.status = "URL incollato dalla clipboard."
+		case destinationScreen:
+			m.dirInput.SetValue(strings.TrimSpace(msg.value))
+			m.status = "Percorso incollato dalla clipboard."
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if key.Matches(msg, appKeys.quit) && m.screen != cloningScreen {
 			m.quitting = true
 			return m, tea.Quit
+		}
+		if (m.screen == urlScreen || m.screen == destinationScreen) &&
+			(msg.Type == tea.KeyCtrlV || msg.String() == "ctrl+v") {
+			return m, readClipboard()
 		}
 	case cloneResultMsg:
 		m.result = msg
@@ -384,7 +406,7 @@ func (m model) viewURL() string {
 			providerPill("GITHUB", "github.com")+"  "+providerPill("GITLAB", "gitlab.com"),
 		),
 	)
-	return lipgloss.JoinVertical(lipgloss.Left, title, copy, "", field, m.viewError())
+	return lipgloss.JoinVertical(lipgloss.Left, title, copy, "", field, m.viewError(), m.viewStatus())
 }
 
 func (m model) viewDestination() string {
@@ -399,7 +421,7 @@ func (m model) viewDestination() string {
 			m.dirInput.View(),
 		),
 	)
-	return lipgloss.JoinVertical(lipgloss.Left, title, copy, "", field)
+	return lipgloss.JoinVertical(lipgloss.Left, title, copy, "", field, m.viewStatus())
 }
 
 func (m model) viewCloning() string {
@@ -431,14 +453,21 @@ func (m model) viewError() string {
 	return lipgloss.NewStyle().Foreground(danger).Render("  " + m.err.Error())
 }
 
+func (m model) viewStatus() string {
+	if m.status == "" {
+		return ""
+	}
+	return helpStyle.Render("  " + m.status)
+}
+
 func (m model) viewFooter() string {
 	switch m.screen {
 	case historyScreen:
 		return helpStyle.Render("↑/↓ scegli   •   enter apri   •   n nuovo fetch   •   q esci")
 	case urlScreen:
-		return helpStyle.Render("enter continua   •   esc torna ai fetch   •   q esci")
+		return helpStyle.Render("ctrl+v incolla   •   enter continua   •   esc indietro   •   q esci")
 	case destinationScreen:
-		return helpStyle.Render("enter clona   •   esc indietro   •   q esci")
+		return helpStyle.Render("ctrl+v incolla   •   enter clona   •   esc indietro   •   q esci")
 	case cloningScreen:
 		return helpStyle.Render("attendi   •   git clone in corso")
 	case resultScreen:
