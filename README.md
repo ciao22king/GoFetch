@@ -49,7 +49,9 @@ chmod +x install.sh
 ./install.sh
 ```
 
-Lo script compila GoFetch e lo installa nella directory `GOBIN` (oppure in `$(go env GOPATH)/bin`). Puoi cambiare destinazione con:
+Lo script compila GoFetch e lo installa in `~/.local/bin`, aggiungendo automaticamente la directory al file di configurazione della shell. Dopo l’installazione apri un nuovo terminale oppure esegui il comando `export PATH="$HOME/.local/bin:$PATH"` mostrato dallo script.
+
+Puoi cambiare destinazione con:
 
 ```bash
 GOFETCH_BIN_DIR="$HOME/.local/bin" ./install.sh
