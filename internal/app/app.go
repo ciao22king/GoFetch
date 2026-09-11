@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,7 +15,8 @@ import (
 type screen int
 
 const (
-	urlScreen screen = iota
+	historyScreen screen = iota
+	urlScreen
 	destinationScreen
 	cloningScreen
 	resultScreen
@@ -29,7 +29,10 @@ type model struct {
 	spinner    spinner.Model
 	repository repository
 	result     cloneResultMsg
+	history    []historyEntry
+	selected   int
 	err        error
+	status     string
 	width      int
 	height     int
 	version    string
@@ -112,8 +115,15 @@ func newModel(initialURL, initialDir, version string) model {
 		spinner:    spin,
 		version:    version,
 		initialURL: initialURL,
+		history:    loadHistory(),
 	}
-	urlInput.Focus()
+	if initialURL != "" {
+		m.screen = urlScreen
+		urlInput.Focus()
+	} else {
+		m.screen = historyScreen
+		urlInput.Blur()
+	}
 	return m
 }
 
@@ -135,11 +145,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case cloneResultMsg:
 		m.result = msg
-		m.screen = resultScreen
+		if msg.err == nil {
+			entry := historyEntry{
+				repository: m.repository,
+				Target:     msg.target,
+			}
+			m.history = upsertHistory(m.history, entry)
+			if err := saveHistory(m.history); err != nil {
+				m.status = "Clone completato, ma non riesco a salvare la cronologia."
+			} else {
+				m.status = "Clone completato e aggiunto ai fetch recenti."
+			}
+			m.selected = 0
+			m.screen = historyScreen
+		} else {
+			m.screen = resultScreen
+		}
+		return m, nil
+	case openResultMsg:
+		if msg.err != nil {
+			m.status = "Non riesco ad aprire la cartella: " + compactError(msg.err)
+		} else {
+			m.status = "Cartella aperta: " + msg.target
+		}
 		return m, nil
 	}
 
 	switch m.screen {
+	case historyScreen:
+		return m.updateHistory(msg)
 	case urlScreen:
 		return m.updateURL(msg)
 	case destinationScreen:
@@ -154,9 +188,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+
+	switch keyMsg.String() {
+	case "up", "k":
+		if len(m.history) > 0 {
+			m.selected = max(0, m.selected-1)
+		}
+	case "down", "j":
+		if len(m.history) > 0 {
+			m.selected = min(len(m.history)-1, m.selected+1)
+		}
+	case "n", "c":
+		m.status = ""
+		m.err = nil
+		m.screen = urlScreen
+		m.urlInput.SetValue("")
+		m.urlInput.Focus()
+		return m, textinput.Blink
+	case "r":
+		m.history = loadHistory()
+		m.selected = min(m.selected, max(len(m.history)-1, 0))
+		m.status = "Cronologia aggiornata."
+	case "enter":
+		if len(m.history) > 0 {
+			m.status = "Apro " + historyLabel(m.history[m.selected]) + "…"
+			return m, openRepository(m.history[m.selected].Target)
+		}
+	}
+	return m, nil
+}
+
 func (m model) updateURL(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if key.Matches(msg, appKeys.back) {
+			m.screen = historyScreen
+			m.urlInput.Blur()
+			m.status = ""
+			return m, nil
+		}
 		if key.Matches(msg, appKeys.enter) {
 			repo, err := parseRepository(m.urlInput.Value())
 			if err != nil {
@@ -165,6 +240,7 @@ func (m model) updateURL(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.repository = repo
 			m.err = nil
+			m.status = ""
 			m.screen = destinationScreen
 			m.urlInput.Blur()
 			m.dirInput.Focus()
@@ -187,6 +263,7 @@ func (m model) updateDestination(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if key.Matches(msg, appKeys.enter) {
 			m.err = nil
+			m.status = ""
 			m.screen = cloningScreen
 			m.startedAt = time.Now()
 			m.dirInput.Blur()
@@ -202,11 +279,8 @@ func (m model) updateResult(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch {
 		case key.Matches(keyMsg, appKeys.enter):
-			m.screen = urlScreen
+			m.screen = historyScreen
 			m.err = nil
-			m.urlInput.SetValue("")
-			m.dirInput.SetValue(filepath.Dir(m.result.target))
-			m.urlInput.Focus()
 			return m, textinput.Blink
 		case key.Matches(keyMsg, appKeys.back):
 			m.screen = destinationScreen
@@ -237,6 +311,8 @@ func (m model) View() string {
 
 func (m model) viewBody() string {
 	switch m.screen {
+	case historyScreen:
+		return m.viewHistory()
 	case urlScreen:
 		return m.viewURL()
 	case destinationScreen:
@@ -248,6 +324,53 @@ func (m model) viewBody() string {
 	default:
 		return ""
 	}
+}
+
+func (m model) viewHistory() string {
+	title := lipgloss.NewStyle().Foreground(ink).Bold(true).Render("Your fetches")
+	copy := subtitleStyle.Render("Scegli un repository con ↑/↓ e premi Invio per aprire la cartella.")
+
+	var body string
+	if len(m.history) == 0 {
+		body = cardStyle.Render(lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Foreground(cyan).Bold(true).Render("Nessun fetch ancora"),
+			"",
+			subtitleStyle.Render("Premi n per clonare il tuo primo repository."),
+		))
+	} else {
+		start := max(0, m.selected-4)
+		end := min(len(m.history), start+8)
+		if end-start < 8 {
+			start = max(0, end-8)
+		}
+		rows := make([]string, 0, end-start)
+		for index, entry := range m.history[start:end] {
+			rows = append(rows, m.viewHistoryRow(start+index, entry))
+		}
+		body = cardStyle.Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
+	}
+
+	status := ""
+	if m.status != "" {
+		status = subtitleStyle.Render(m.status)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, title, copy, "", body, status)
+}
+
+func (m model) viewHistoryRow(index int, entry historyEntry) string {
+	prefix := "  "
+	nameStyle := lipgloss.NewStyle().Foreground(ink)
+	if index == m.selected {
+		prefix = "› "
+		nameStyle = nameStyle.Foreground(cyan).Bold(true)
+	}
+	name := nameStyle.Render(historyLabel(entry))
+	provider := lipgloss.NewStyle().Foreground(muted).Render(entry.Provider)
+	target := lipgloss.NewStyle().Foreground(muted).Render(entry.Target)
+	return lipgloss.JoinVertical(lipgloss.Left,
+		prefix+name+"  "+provider,
+		"   "+target,
+	)
 }
 
 func (m model) viewURL() string {
@@ -310,14 +433,16 @@ func (m model) viewError() string {
 
 func (m model) viewFooter() string {
 	switch m.screen {
+	case historyScreen:
+		return helpStyle.Render("↑/↓ scegli   •   enter apri   •   n nuovo fetch   •   q esci")
 	case urlScreen:
-		return helpStyle.Render("enter continue   •   q quit")
+		return helpStyle.Render("enter continua   •   esc torna ai fetch   •   q esci")
 	case destinationScreen:
-		return helpStyle.Render("enter clone   •   esc back   •   q quit")
+		return helpStyle.Render("enter clona   •   esc indietro   •   q esci")
 	case cloningScreen:
-		return helpStyle.Render("please wait   •   git clone in progress")
+		return helpStyle.Render("attendi   •   git clone in corso")
 	case resultScreen:
-		return helpStyle.Render("enter clone another   •   q quit")
+		return helpStyle.Render("enter torna ai fetch   •   esc indietro   •   q esci")
 	default:
 		return ""
 	}
