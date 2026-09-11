@@ -32,7 +32,7 @@ Requirements:
 - Git available on your `PATH`
 
 ```bash
-go install github.com/ciao22king/GoFetch@latest
+gh repo clone ciao22king/GoFetch
 ```
 
 Or build locally:
