@@ -11,7 +11,7 @@ The normal flow is simple, but it is still full of tiny decisions: HTTPS or SSH,
 1. Choose a previous fetch with `↑`/`↓` and press `Enter` to open its folder, or press `n` for a new clone.
 2. Paste a GitHub or GitLab URL.
 3. Choose the parent directory.
-4. GoFetch runs `git clone` and saves the result in its local history.
+4. GoFetch runs `git clone`, attempts a project build, and saves the result in its local history.
 
 It supports:
 
@@ -23,6 +23,9 @@ It supports:
 - A keyboard-first Bubble Tea interface
 - Persistent fetch history in `~/.config/gofetch/history.json`
 - One-key opening of previously fetched repository folders
+- Automatic build detection for Go, Rust, and Node projects
+
+After a successful clone, GoFetch runs `go build ./...`, `cargo build`, or `npm run build` when the corresponding project manifest is present. If no supported build setup is found, the clone still completes normally. Node build scripts and Rust build scripts can execute project-defined code, so use automatic builds only for repositories you trust.
 
 ## Install
 
