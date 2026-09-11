@@ -49,7 +49,7 @@ chmod +x install.sh
 ./install.sh
 ```
 
-Lo script compila GoFetch e lo installa in `~/.local/bin`, aggiungendo automaticamente la directory al file di configurazione della shell. Dopo l’installazione apri un nuovo terminale oppure esegui il comando `export PATH="$HOME/.local/bin:$PATH"` mostrato dallo script.
+Lo script compila esclusivamente i file presenti nella directory locale del progetto. Non usa la rete e non usa il numero di versione per scegliere cosa installare. Mostra la data dell’ultimo commit locale solo come informazione. Poi installa GoFetch in `~/.local/bin`, aggiungendo automaticamente la directory al file di configurazione della shell. Dopo l’installazione apri un nuovo terminale oppure esegui il comando `export PATH="$HOME/.local/bin:$PATH"` mostrato dallo script.
 
 Puoi cambiare destinazione con:
 
