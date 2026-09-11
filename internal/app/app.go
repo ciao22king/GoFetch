@@ -175,8 +175,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history = upsertHistory(m.history, entry)
 			if err := saveHistory(m.history); err != nil {
 				m.status = "Clone completato, ma non riesco a salvare la cronologia."
+			} else if msg.build.command != "" && msg.build.err != nil {
+				m.status = fmt.Sprintf("Clone completato, ma la build è fallita (%s): %s", msg.build.command, compactError(msg.build.err))
+			} else if msg.build.command != "" {
+				m.status = fmt.Sprintf("Clone e build completati (%s).", msg.build.command)
 			} else {
-				m.status = "Clone completato e aggiunto ai fetch recenti."
+				m.status = "Clone completato e aggiunto ai fetch recenti. Nessuna build riconosciuta."
 			}
 			m.selected = 0
 			m.screen = historyScreen
@@ -428,7 +432,7 @@ func (m model) viewCloning() string {
 	elapsed := time.Since(m.startedAt).Round(time.Second)
 	title := lipgloss.NewStyle().Foreground(ink).Bold(true).Render("Fetching your repository")
 	target := subtitleStyle.Render(m.repository.Provider + "  ·  " + m.repository.Name)
-	status := lipgloss.NewStyle().Foreground(cyan).Render(m.spinner.View() + "  git is doing its thing…")
+	status := lipgloss.NewStyle().Foreground(cyan).Render(m.spinner.View() + "  clone + build automatici in corso…")
 	timer := helpStyle.Render(fmt.Sprintf("elapsed %s", elapsed))
 	return cardStyle.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", target, status, timer))
 }
