@@ -32,7 +32,7 @@ Requirements:
 - Git available on your `PATH`
 
 ```bash
-gh repo clone ciao22king/GoFetch
+go install github.com/ciao22king/GoFetch@latest
 ```
 
 Or build locally:
@@ -40,6 +40,19 @@ Or build locally:
 ```bash
 go build -o gofetch .
 ./gofetch
+```
+
+Installazione automatica:
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+Lo script compila GoFetch e lo installa nella directory `GOBIN` (oppure in `$(go env GOPATH)/bin`). Puoi cambiare destinazione con:
+
+```bash
+GOFETCH_BIN_DIR="$HOME/.local/bin" ./install.sh
 ```
 
 ## Usage
@@ -69,6 +82,7 @@ gofetch --dir ~/Code
 | `Enter` | Continue / clone |
 | `↑` / `↓` | Select a previous fetch |
 | `n` | Start a new fetch |
+| `Ctrl+V` / `Cmd+V` | Incolla URL o percorso dalla clipboard |
 | `Esc` | Go back |
 | `q` | Quit |
 
