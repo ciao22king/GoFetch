@@ -5,6 +5,9 @@ set -euo pipefail
 # Uninstall script for GoFetch
 # Removes installed binaries, symlinks, config and PATH lines added by install.sh
 
+# Try to avoid getcwd errors when the caller's current directory was removed
+cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null || cd / 2>/dev/null || true
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ -n "${GOFETCH_BIN_DIR:-}" ]]; then
@@ -88,9 +91,10 @@ else
 fi
 
 # 4) Remove PATH line added to shell config by install.sh
-PATH_LINE='export PATH="${GOBIN}:$PATH"'
-# We must match the literal line that was written during install; install.sh used
-# PATH_LINE="export PATH=\"${GOBIN}:\$PATH\"" and a preceding comment '# GoFetch'
+# The installer wrote a block like:
+#   # GoFetch
+#   export PATH="${GOBIN}:$PATH"
+# We'll remove a '# GoFetch' line followed by an export PATH line that contains the $GOBIN prefix.
 
 SHELL_NAME="${SHELL##*/}"
 case "$SHELL_NAME" in
@@ -101,27 +105,29 @@ esac
 
 echo "Controllo e rimozione della riga PATH in: $SHELL_CONFIG"
 if [[ -e "$SHELL_CONFIG" && -w "$SHELL_CONFIG" ]]; then
-  # Remove the block: a line with '# GoFetch' followed by the exact PATH_LINE
-  # Use awk to safely remove occurrences
-  awk -v gobin="$GOBIN" '
-    BEGIN { p = 0 }
-    {
-      if ($0 == "# GoFetch") {
-        getline nextline
-        expected = "export PATH=\"" gobin ":$PATH\""
-        # Note: when awk expands environment PATH it won't match, so compare using prefix
-        if (nextline ~ /^export PATH=\"/ && nextline ~ gobin) {
-          # skip both lines
-          next
-        } else {
-          print "# GoFetch"
-          print nextline
-        }
-      } else {
-        print $0
-      }
-    }
-  ' "$SHELL_CONFIG" > "$SHELL_CONFIG.gofetch.tmp" && mv "$SHELL_CONFIG.gofetch.tmp" "$SHELL_CONFIG" && echo "Riga PATH rimossa (se presente) in $SHELL_CONFIG" || echo "Impossibile modificare $SHELL_CONFIG"
+  tmpfile="$SHELL_CONFIG.gofetch.tmp"
+  # Read line-by-line and skip the pattern block when matched
+  {
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" == "# GoFetch" ]]; then
+        # read the next line (may be empty)
+        if IFS= read -r nextline; then
+          if [[ "$nextline" == export\ PATH=\"${GOBIN}:*" ]]; then
+            # skip both lines
+            continue
+          else
+            printf '%s\n' "$line"
+            printf '%s\n' "$nextline"
+          fi
+        else
+          # '# GoFetch' was the last line: just print it (conservative)
+          printf '%s\n' "$line"
+        fi
+      else
+        printf '%s\n' "$line"
+      fi
+    done < "$SHELL_CONFIG"
+  } > "$tmpfile" && mv "$tmpfile" "$SHELL_CONFIG" && echo "Riga PATH rimossa (se presente) in $SHELL_CONFIG" || echo "Impossibile modificare $SHELL_CONFIG"
 else
   echo "Non posso modificare $SHELL_CONFIG (non esiste o non è scrivibile). Rimuovi manualmente le righe '# GoFetch' e la linea PATH se presenti."
 fi
@@ -135,6 +141,8 @@ echo " - Directory di configurazione rimossa: $CONFIG_DIR (se presente)"
 echo " - Linee PATH rimosse dallo shell config: $SHELL_CONFIG (se possibile)"
 
 echo
-echo "Se qualche file non è stato rimosso per motivi di permessi, esegui lo script con i permessi appropriati o rimuovili manualmente con sudo (es: sudo rm /usr/local/bin/gofetch)."
+echo "Note:
+ - Se hai eseguito lo script con sudo, HOME sarà /root e lo script opererà sulla home di root. Per disinstallare l'installazione dell'utente corrente, esegui lo script senza sudo.
+ - Se alcuni file non sono stati rimossi per permessi, rimuovili manualmente (es: sudo rm /usr/local/bin/gofetch)."
 
 exit 0
