@@ -18,10 +18,9 @@ fi
 if [[ -n "${GOFETCH_BIN_DIR:-}" ]]; then
   GOBIN="$GOFETCH_BIN_DIR"
 else
-  GOBIN="$(go env GOBIN)"
-  if [[ -z "$GOBIN" ]]; then
-    GOBIN="$(go env GOPATH)/bin"
-  fi
+  # A Go installation's GOPATH/bin is not always in PATH. Use the
+  # conventional per-user bin directory so the installer can configure it.
+  GOBIN="${HOME}/.local/bin"
 fi
 
 mkdir -p "$GOBIN"
@@ -38,9 +37,20 @@ echo "GoFetch installato: $GOBIN/gofetch"
 case ":${PATH}:" in
   *":${GOBIN}:"*) ;;
   *)
+    case "${SHELL##*/}" in
+      bash) SHELL_CONFIG="${HOME}/.bashrc" ;;
+      zsh) SHELL_CONFIG="${HOME}/.zshrc" ;;
+      *) SHELL_CONFIG="${HOME}/.profile" ;;
+    esac
+    PATH_LINE="export PATH=\"${GOBIN}:\$PATH\""
+    touch "$SHELL_CONFIG"
+    if ! grep -Fqx "$PATH_LINE" "$SHELL_CONFIG"; then
+      printf '\n# GoFetch\n%s\n' "$PATH_LINE" >> "$SHELL_CONFIG"
+      echo "PATH aggiornato in: $SHELL_CONFIG"
+    fi
     echo
-    echo "Nota: aggiungi questa directory al PATH per eseguire 'gofetch' ovunque:"
-    echo "  export PATH=\"\$PATH:$GOBIN\""
+    echo "Per abilitarlo subito nella shell corrente esegui:"
+    echo "  export PATH=\"$GOBIN:\$PATH\""
     ;;
 esac
 
