@@ -28,18 +28,141 @@ func apply(t *testing.T, m model, msg tea.Msg) (model, tea.Cmd) {
 	return next, cmd
 }
 
-func TestFlowURLToDestination(t *testing.T) {
+func TestFlowURLToBranchToDestination(t *testing.T) {
 	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
 	if m.screen != urlScreen {
 		t.Fatalf("initial screen = %v, want urlScreen", m.screen)
 	}
 
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if m.screen != destinationScreen {
-		t.Fatalf("screen after URL = %v, want destinationScreen", m.screen)
+	if m.screen != branchScreen {
+		t.Fatalf("screen after URL = %v, want branchScreen", m.screen)
 	}
 	if m.repository.Name != "project" {
 		t.Fatalf("parsed repository name = %q, want project", m.repository.Name)
+	}
+
+	m.branchInput.SetValue("develop")
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.screen != destinationScreen {
+		t.Fatalf("screen after branch = %v, want destinationScreen", m.screen)
+	}
+}
+
+func TestBranchStepCanBeLeftEmpty(t *testing.T) {
+	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	m.dirInput.SetValue(t.TempDir())
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.screen != cloningScreen {
+		t.Fatalf("screen = %v, want cloningScreen", m.screen)
+	}
+	if m.cloneBranch != "" {
+		t.Fatalf("cloneBranch = %q, want empty for the default branch", m.cloneBranch)
+	}
+}
+
+func TestBranchStepCapturesBranch(t *testing.T) {
+	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.branchInput.SetValue("release/1.x")
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	m.dirInput.SetValue(t.TempDir())
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.screen != cloningScreen {
+		t.Fatalf("screen = %v, want cloningScreen", m.screen)
+	}
+	if m.cloneBranch != "release/1.x" {
+		t.Fatalf("cloneBranch = %q, want release/1.x", m.cloneBranch)
+	}
+}
+
+func TestBranchRejectsSpaces(t *testing.T) {
+	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.branchInput.SetValue("bad branch")
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.screen != branchScreen {
+		t.Fatalf("screen = %v, want to stay on branchScreen for an invalid branch", m.screen)
+	}
+	if m.err == nil {
+		t.Fatal("expected a validation error for a branch containing spaces")
+	}
+}
+
+func TestBranchEscReturnsToURL(t *testing.T) {
+	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.screen != urlScreen {
+		t.Fatalf("screen = %v, want urlScreen after esc on the branch step", m.screen)
+	}
+}
+
+func TestProgressLinesAreCapturedAndBounded(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.screen = cloningScreen
+	for i := 0; i < maxProgressLines+50; i++ {
+		m, _ = apply(t, m, progressMsg{line: "Receiving objects: 42%"})
+	}
+	if len(m.progressLog) != maxProgressLines {
+		t.Fatalf("progressLog length = %d, want %d", len(m.progressLog), maxProgressLines)
+	}
+
+	// Blank lines are ignored so the view does not fill with git's carriage
+	// return padding.
+	before := len(m.progressLog)
+	m, _ = apply(t, m, progressMsg{line: "   "})
+	if len(m.progressLog) != before {
+		t.Fatal("blank progress line should be ignored")
+	}
+}
+
+func TestTailAndTruncateHelpers(t *testing.T) {
+	values := []string{"a", "b", "c", "d"}
+	if got := tailStrings(values, 2); len(got) != 2 || got[0] != "c" || got[1] != "d" {
+		t.Fatalf("tailStrings() = %v, want [c d]", got)
+	}
+	if got := tailStrings(values, 10); len(got) != 4 {
+		t.Fatalf("tailStrings() = %v, want all values", got)
+	}
+	if got := truncateLine("  short  ", 10); got != "short" {
+		t.Fatalf("truncateLine() = %q, want short", got)
+	}
+	if got := truncateLine("abcdefghij", 5); len([]rune(got)) != 5 {
+		t.Fatalf("truncateLine() = %q, want 5 runes", got)
+	}
+}
+
+func TestInitialBranchSkipsBranchScreen(t *testing.T) {
+	m := newTestModel(t, Options{
+		InitialURL:    "https://github.com/owner/project",
+		InitialBranch: "develop",
+	})
+	if m.screen != destinationScreen {
+		t.Fatalf("screen = %v, want destinationScreen when URL and branch are given", m.screen)
+	}
+	if m.branchInput.Value() != "develop" {
+		t.Fatalf("branchInput = %q, want develop", m.branchInput.Value())
+	}
+	if m.repository.Name != "project" {
+		t.Fatalf("repository name = %q, want project", m.repository.Name)
+	}
+}
+
+func TestViewsDoNotPanicOnEveryScreen(t *testing.T) {
+	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
+	m.width, m.height = 100, 40
+	m.repository = repository{Provider: "GitHub", Name: "project", URL: "https://github.com/owner/project"}
+
+	for _, screen := range []screen{historyScreen, urlScreen, branchScreen, destinationScreen, cloningScreen, resultScreen} {
+		m.screen = screen
+		if view := m.View(); view == "" {
+			t.Fatalf("View() for screen %v is empty", screen)
+		}
 	}
 }
 
@@ -76,6 +199,7 @@ func TestOverwriteConfirmation(t *testing.T) {
 
 	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m.dirInput.SetValue(parent)
 
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -94,6 +218,7 @@ func TestOverwriteConfirmation(t *testing.T) {
 
 func TestEscCancelsClone(t *testing.T) {
 	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m.dirInput.SetValue(t.TempDir())
 
@@ -114,6 +239,7 @@ func TestCloneSuccessStoresHistory(t *testing.T) {
 	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 
 	m, _ = apply(t, m, cloneResultMsg{target: filepath.Join(t.TempDir(), "project")})
 	if m.screen != historyScreen {
@@ -126,6 +252,7 @@ func TestCloneSuccessStoresHistory(t *testing.T) {
 
 func TestCloneFailureShowsResultScreen(t *testing.T) {
 	m := newTestModel(t, Options{InitialURL: "https://github.com/owner/project"})
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -183,6 +310,7 @@ func TestTabCyclesDestinationSuggestions(t *testing.T) {
 		{Target: filepath.Join("/code", "alpha")},
 		{Target: filepath.Join("/work", "beta")},
 	}
+	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 
 	m, _ = apply(t, m, tea.KeyMsg{Type: tea.KeyTab})

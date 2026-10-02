@@ -1,12 +1,15 @@
 package app
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,12 +23,32 @@ type cloneResultMsg struct {
 	build    buildResult
 }
 
-// cloneRepository runs `git clone` in a cancellable goroutine. The cancel func
-// is stored on the model so the cloning screen can abort a stuck network fetch
-// (for example a private repository waiting on credentials) with Esc. When
-// overwrite is true, an existing non-empty destination is removed first.
-// noBuild skips the automatic build step entirely.
-func cloneRepository(repo repository, parent string, overwrite, noBuild bool) (tea.Cmd, context.CancelFunc) {
+// progressMsg carries a single line of `git clone --progress` output to the
+// cloning screen so the user can watch the fetch happen instead of a frozen
+// spinner.
+type progressMsg struct{ line string }
+
+// progressTickMsg is delivered on a fixed interval while a clone is running so
+// the elapsed timer in the cloning view keeps counting even when git is quiet.
+type progressTickMsg struct{}
+
+const cloneProgressInterval = time.Second
+
+// maxProgressLines bounds how much clone output the UI keeps in memory and
+// shows; older lines scroll out of view.
+const maxProgressLines = 200
+
+func progressTick() tea.Cmd {
+	return tea.Tick(cloneProgressInterval, func(time.Time) tea.Msg { return progressTickMsg{} })
+}
+
+// cloneRepository runs `git clone` in a cancellable goroutine and streams its
+// progress to the TUI. The cancel func is stored on the model so the cloning
+// screen can abort a stuck network fetch (for example a private repository
+// waiting on credentials) with Esc. When overwrite is true, an existing
+// non-empty destination is removed first. An empty branch clones the remote's
+// default branch. noBuild skips the automatic build step entirely.
+func cloneRepository(repo repository, parent, branch string, overwrite, noBuild bool, progress chan<- string) (tea.Cmd, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := func() tea.Msg {
 		started := time.Now()
@@ -49,12 +72,45 @@ func cloneRepository(repo repository, parent string, overwrite, noBuild bool) (t
 			return cloneResultMsg{target: target, err: err, duration: time.Since(started)}
 		}
 
-		gitCmd := exec.CommandContext(ctx, "git", "clone", "--progress", repo.URL, target)
+		args := []string{"clone", "--progress"}
+		if strings.TrimSpace(branch) != "" {
+			args = append(args, "--branch", branch)
+		}
+		args = append(args, repo.URL, target)
+
+		gitCmd := exec.CommandContext(ctx, "git", args...)
 		gitCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		var output bytes.Buffer
-		gitCmd.Stdout = &output
-		gitCmd.Stderr = &output
+
+		var combined bytes.Buffer
+		reader, writer := io.Pipe()
+		gitCmd.Stdout = writer
+		gitCmd.Stderr = writer
+
+		// git writes clone progress to stderr. Drain the pipe on a separate
+		// goroutine so a slow UI can never block git, and publish each line both
+		// to the TUI (progress) and to a buffer for the final result.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			scanner := bufio.NewScanner(reader)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for scanner.Scan() {
+				line := scanner.Text()
+				combined.WriteString(line)
+				combined.WriteByte('\n')
+				if progress != nil {
+					select {
+					case progress <- line:
+					default:
+					}
+				}
+			}
+		}()
+
 		runErr := gitCmd.Run()
+		writer.Close()
+		wg.Wait()
 
 		if ctx.Err() == context.Canceled {
 			// git leaves a half-written directory behind on cancel; remove it
@@ -63,6 +119,7 @@ func cloneRepository(repo repository, parent string, overwrite, noBuild bool) (t
 			return cloneResultMsg{target: target, err: errCloneCanceled, duration: time.Since(started)}
 		}
 
+		output := combined.String()
 		build := buildResult{skipped: true}
 		if runErr == nil && !noBuild {
 			build = buildRepository(target)
@@ -70,8 +127,8 @@ func cloneRepository(repo repository, parent string, overwrite, noBuild bool) (t
 
 		return cloneResultMsg{
 			target:   target,
-			output:   strings.TrimSpace(output.String()),
-			err:      friendlyCloneError(runErr, output.String(), target),
+			output:   strings.TrimSpace(output),
+			err:      friendlyCloneError(runErr, output, target),
 			duration: time.Since(started),
 			build:    build,
 		}
@@ -91,6 +148,8 @@ func friendlyCloneError(err error, output, target string) error {
 	switch {
 	case strings.Contains(lower, "repository not found"):
 		return fmt.Errorf("repository non trovato o privato: controlla l'URL e le tue credenziali")
+	case strings.Contains(lower, "remote branch") && strings.Contains(lower, "not found"):
+		return fmt.Errorf("branch remoto inesistente: controlla il nome del branch")
 	case strings.Contains(lower, "authentication failed"),
 		strings.Contains(lower, "permission denied"),
 		strings.Contains(lower, "could not read from remote repository"),

@@ -8,11 +8,12 @@ import (
 	"github.com/ciao22king/GoFetch/internal/app"
 )
 
-var version = "0.4.0"
+var version = "0.5.0"
 
 func main() {
 	var (
 		repoURL = flag.String("url", "", "repository URL to clone")
+		branch  = flag.String("branch", "", "branch to clone (defaults to the remote default branch)")
 		dir     = flag.String("dir", "", "parent directory for the clone")
 		noBuild = flag.Bool("no-build", false, "skip the automatic build after cloning")
 		showVer = flag.Bool("version", false, "print the version")
@@ -30,10 +31,11 @@ func main() {
 	}
 
 	if err := app.Run(app.Options{
-		InitialURL: *repoURL,
-		InitialDir: initialDir,
-		Version:    version,
-		NoBuild:    *noBuild,
+		InitialURL:    *repoURL,
+		InitialBranch: *branch,
+		InitialDir:    initialDir,
+		Version:       version,
+		NoBuild:       *noBuild,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "gofetch: %v\n", err)
 		os.Exit(1)

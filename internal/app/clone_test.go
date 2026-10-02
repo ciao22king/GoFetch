@@ -70,7 +70,7 @@ func TestCloneRepositoryEndToEnd(t *testing.T) {
 
 	parent := t.TempDir()
 	repo := repository{URL: "file://" + origin, Provider: "GitHub", Name: "cloned"}
-	cmd, cancel := cloneRepository(repo, parent, false, true)
+	cmd, cancel := cloneRepository(repo, parent, "", false, true, nil)
 	defer cancel()
 
 	msg := cmd()
@@ -86,12 +86,82 @@ func TestCloneRepositoryEndToEnd(t *testing.T) {
 	}
 
 	// A second clone into the same target must be refused without overwrite.
-	cmd2, cancel2 := cloneRepository(repo, parent, false, true)
+	cmd2, cancel2 := cloneRepository(repo, parent, "", false, true, nil)
 	defer cancel2()
 	msg2 := cmd2().(cloneResultMsg)
 	if msg2.err == nil {
 		t.Fatal("cloneRepository() overwrote a non-empty target without permission")
 	}
+}
+
+func TestCloneRepositorySpecificBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	origin := t.TempDir()
+	runGit(t, origin, "init", "-q")
+	runGit(t, origin, "config", "user.email", "test@example.com")
+	runGit(t, origin, "config", "user.name", "GoFetch Test")
+	if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte("main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, origin, "add", ".")
+	runGit(t, origin, "commit", "-q", "-m", "init")
+
+	// A second branch with a file that only exists there.
+	runGit(t, origin, "checkout", "-q", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(origin, "FEATURE.md"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, origin, "add", ".")
+	runGit(t, origin, "commit", "-q", "-m", "feature")
+
+	parent := t.TempDir()
+	repo := repository{URL: "file://" + origin, Provider: "GitHub", Name: "branchy"}
+	cmd, cancel := cloneRepository(repo, parent, "feature", false, true, nil)
+	defer cancel()
+
+	result := cmd().(cloneResultMsg)
+	if result.err != nil {
+		t.Fatalf("cloneRepository(branch=feature) error = %v", result.err)
+	}
+	if _, err := os.Stat(filepath.Join(parent, "branchy", "FEATURE.md")); err != nil {
+		t.Fatalf("branch checkout missing FEATURE.md: %v", err)
+	}
+}
+
+func TestCloneRepositoryStreamsProgress(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	origin := t.TempDir()
+	runGit(t, origin, "init", "-q")
+	runGit(t, origin, "config", "user.email", "test@example.com")
+	runGit(t, origin, "config", "user.name", "GoFetch Test")
+	if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, origin, "add", ".")
+	runGit(t, origin, "commit", "-q", "-m", "init")
+
+	parent := t.TempDir()
+	repo := repository{URL: "file://" + origin, Provider: "GitHub", Name: "streamed"}
+	progress := make(chan string, 64)
+
+	cmd, cancel := cloneRepository(repo, parent, "", false, true, progress)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { cmd(); close(done) }()
+
+	select {
+	case <-progress:
+		// At least one progress line arrived before the clone finished.
+	case <-done:
+		t.Fatal("clone finished without streaming any progress line")
+	}
+	<-done
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
