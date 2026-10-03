@@ -10,8 +10,9 @@ The normal flow is simple, but it is still full of tiny decisions: HTTPS or SSH,
 
 1. Choose a previous fetch with `↑`/`↓` and press `Enter` to open its folder, or press `n` for a new clone.
 2. Paste a GitHub or GitLab URL.
-3. Choose the parent directory (press `Tab` to cycle through recent folders).
-4. GoFetch runs `git clone`, attempts a project build, and saves the result in its local history.
+3. Optionally type a branch (leave it empty for the remote default branch).
+4. Choose the parent directory (press `Tab` to cycle through recent folders) and check the destination preview.
+5. GoFetch runs `git clone`, streams its progress live, attempts a project build, and saves the result in its local history.
 
 It supports:
 
@@ -19,6 +20,9 @@ It supports:
 - GitLab nested groups
 - Self-hosted / other Git forges (any real host is accepted as a generic remote)
 - `~` in destination paths, with an absolute clone target computed up front
+- An optional branch selection, with `--branch` for non-interactive use
+- A live clone progress stream inside the TUI
+- A destination preview before the clone starts
 - A safe overwrite confirmation when the destination folder already exists
 - Cancellable clones (`Esc` while cloning)
 - Friendly, actionable clone errors
@@ -94,6 +98,12 @@ Start with a URL:
 gofetch --url git@github.com:owner/project.git
 ```
 
+Clone a specific branch (skips the branch prompt):
+
+```bash
+gofetch --url https://github.com/owner/project --branch develop
+```
+
 Choose a parent directory:
 
 ```bash
@@ -110,12 +120,12 @@ gofetch --url https://github.com/owner/project --no-build
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Continue / clone / open the selected fetch |
+| `Enter` | Continue / clone / open the selected fetch (empty branch = default) |
 | `↑` / `↓` (or `k` / `j`) | Select a previous fetch |
 | `n` | Start a new fetch |
 | `/` or `Ctrl+L` | Search the history |
 | `Tab` | Cycle through recent destination folders |
-| `Ctrl+V` / `Cmd+V` | Paste a URL or path from the clipboard |
+| `Ctrl+V` / `Cmd+V` | Paste a URL, branch or path from the clipboard |
 | `Ctrl+O` | Open the selected folder in your file manager |
 | `Ctrl+Y` | Copy the selected path to the clipboard |
 | `Ctrl+D` | Remove the selected history entry |
@@ -147,11 +157,9 @@ go test ./...
 go vet ./...
 ```
 
-The test suite covers URL parsing, folder-name sanitization, history persistence, build detection, the TUI state machine and a real end-to-end `git clone`.
+The test suite covers URL parsing, folder-name sanitization, history persistence, build detection, branch selection, clone progress streaming, the TUI state machine and a real end-to-end `git clone`.
 
 ## Roadmap
 
-- Clone destination preview
-- Optional branch selection
 - GitHub/GitLab API search
-- Clone progress stream inside the TUI
+- Multiple repositories in one run
