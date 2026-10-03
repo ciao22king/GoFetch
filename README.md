@@ -8,10 +8,10 @@ GoFetch is a small, focused terminal UI for cloning GitHub and GitLab repositori
 
 The normal flow is simple, but it is still full of tiny decisions: HTTPS or SSH, where to put the folder, and whether the URL is even valid. GoFetch turns that into a calm flow and remembers every successful fetch:
 
-1. Choose a previous fetch with `↑`/`↓` and press `Enter` to open its folder, or press `n` for a new clone.
+1. Choose a previous fetch with `↑`/`↓` and press `Enter` to open its folder, press `u` to update it with a fast-forward `git pull`, or press `n` for a new clone.
 2. Paste a GitHub or GitLab URL.
-3. Optionally type a branch (leave it empty for the remote default branch).
-4. Choose the parent directory (press `Tab` to cycle through recent folders) and check the destination preview.
+3. Optionally type a branch — press `Tab` to complete from the remote's actual branch list (leave it empty for the remote default branch).
+4. Choose the parent directory (press `Tab` to cycle through recent folders), check the destination preview, and press `s` if you want a fast shallow clone.
 5. GoFetch runs `git clone`, streams its progress live, attempts a project build, and saves the result in its local history.
 
 It supports:
@@ -19,8 +19,13 @@ It supports:
 - GitHub and GitLab HTTPS, SSH and `ssh://` URLs
 - GitLab nested groups
 - Self-hosted / other Git forges (any real host is accepted as a generic remote)
+- Local repositories via `file://` URLs
 - `~` in destination paths, with an absolute clone target computed up front
-- An optional branch selection, with `--branch` for non-interactive use
+- An optional branch selection, with `--branch` for non-interactive use and `Tab` completion from the remote's branch list in the TUI
+- Shallow clones (`--depth N`, or `s` on the destination screen) for fast fetches of large repositories
+- Updating an existing clone in place with a safe fast-forward `git pull` (`u` in the history screen)
+- A non-interactive mode (`--yes`) for scripts and CI, printing the destination path to stdout
+- A config file (`config.json` next to the history) with default directory, clone depth and build behavior
 - A live clone progress stream inside the TUI
 - A destination preview before the clone starts
 - A safe overwrite confirmation when the destination folder already exists
@@ -116,6 +121,37 @@ Clone without running the automatic build (useful for untrusted repositories):
 gofetch --url https://github.com/owner/project --no-build
 ```
 
+Shallow clone (only the latest commits — much faster on big repositories):
+
+```bash
+gofetch --url https://github.com/owner/project --depth 1
+```
+
+Non-interactive mode for scripts and CI (no TUI, destination path on stdout):
+
+```bash
+dest=$(gofetch --url https://github.com/owner/project --yes --no-build)
+gofetch --url https://github.com/owner/project --yes --force   # replace an existing clone
+```
+
+Save a default clone directory (written to the config file):
+
+```bash
+gofetch --set-default-dir ~/Code
+```
+
+The config file lives next to the history (`~/.config/gofetch/config.json`, `%AppData%\gofetch\config.json` on Windows):
+
+```json
+{
+  "default_dir": "~/Code",
+  "depth": 0,
+  "no_build": false
+}
+```
+
+Command-line flags always override the config file.
+
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -123,8 +159,10 @@ gofetch --url https://github.com/owner/project --no-build
 | `Enter` | Continue / clone / open the selected fetch (empty branch = default) |
 | `↑` / `↓` (or `k` / `j`) | Select a previous fetch |
 | `n` | Start a new fetch |
+| `u` | Update the selected clone (`git pull --ff-only`) |
 | `/` or `Ctrl+L` | Search the history |
-| `Tab` | Cycle through recent destination folders |
+| `Tab` | Complete the branch from the remote / cycle recent destination folders |
+| `s` | Toggle a shallow clone on the destination screen |
 | `Ctrl+V` / `Cmd+V` | Paste a URL, branch or path from the clipboard |
 | `Ctrl+O` | Open the selected folder in your file manager |
 | `Ctrl+Y` | Copy the selected path to the clipboard |
@@ -157,7 +195,7 @@ go test ./...
 go vet ./...
 ```
 
-The test suite covers URL parsing, folder-name sanitization, history persistence, build detection, branch selection, clone progress streaming, the TUI state machine and a real end-to-end `git clone`.
+The test suite covers URL parsing, folder-name sanitization, history persistence, build detection, branch selection, remote-branch completion, pull summaries, config persistence, clone progress streaming, the TUI state machine and a real end-to-end `git clone`.
 
 ## Roadmap
 
