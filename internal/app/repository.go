@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -82,10 +83,11 @@ func isReservedWindowsName(name string) bool {
 //	ssh://git@github.com/owner/repo(.git)
 //	github.com/owner/repo
 //	gitlab.com/group/subgroup/repo
+//	file:///path/to/local/repo
 //
-// GitHub and GitLab are recognized explicitly; any other host that looks like a
-// real domain is accepted as a generic Git remote so self-hosted instances and
-// other forges keep working.
+// GitHub and GitLab are recognized explicitly; any other host that looks like
+// a real domain is accepted as a generic Git remote so self-hosted instances
+// and other forges keep working. file:// URLs are accepted as local remotes.
 func parseRepository(raw string) (repository, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -114,6 +116,16 @@ func parseRepository(raw string) (repository, error) {
 		parsed, err := url.Parse(normalized)
 		if err != nil {
 			return repository{}, fmt.Errorf("URL non valido: %w", err)
+		}
+		if parsed.Scheme == "file" {
+			// Local repositories need no host validation: file:///path/to/repo
+			// is always a valid generic remote, which also makes GoFetch handy
+			// for local mirrors and tests.
+			name := sanitizeRepoName(strings.TrimSuffix(path.Base(parsed.Path), ".git"))
+			if parsed.Path == "" || parsed.Path == "/" {
+				return repository{}, fmt.Errorf("URL file:// non valido: percorso mancante")
+			}
+			return repository{URL: normalized, Provider: "Local", Name: name}, nil
 		}
 		host = parsed.Hostname()
 		repoPath = parsed.Path

@@ -47,8 +47,10 @@ func progressTick() tea.Cmd {
 // screen can abort a stuck network fetch (for example a private repository
 // waiting on credentials) with Esc. When overwrite is true, an existing
 // non-empty destination is removed first. An empty branch clones the remote's
-// default branch. noBuild skips the automatic build step entirely.
-func cloneRepository(repo repository, parent, branch string, overwrite, noBuild bool, progress chan<- string) (tea.Cmd, context.CancelFunc) {
+// default branch. A depth greater than zero performs a shallow clone limited
+// to that many commits, which is much faster on large repositories. noBuild
+// skips the automatic build step entirely.
+func cloneRepository(repo repository, parent, branch string, overwrite, noBuild bool, depth int, progress chan<- string) (tea.Cmd, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := func() tea.Msg {
 		started := time.Now()
@@ -75,6 +77,9 @@ func cloneRepository(repo repository, parent, branch string, overwrite, noBuild 
 		args := []string{"clone", "--progress"}
 		if strings.TrimSpace(branch) != "" {
 			args = append(args, "--branch", branch)
+		}
+		if depth > 0 {
+			args = append(args, "--depth", fmt.Sprintf("%d", depth))
 		}
 		args = append(args, repo.URL, target)
 
