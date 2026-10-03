@@ -22,6 +22,8 @@ func TestParseRepository(t *testing.T) {
 		{"self hosted generic", "https://git.example.dev/owner/project", "git.example.dev", "project"},
 		{"www prefix stripped", "https://www.github.com/owner/project", "GitHub", "project"},
 		{"trailing slash", "https://github.com/owner/project/", "GitHub", "project"},
+		{"local file url", "file:///tmp/mirrors/project", "Local", "project"},
+		{"local file url with .git", "file:///home/dev/project.git", "Local", "project"},
 	}
 
 	for _, tt := range tests {

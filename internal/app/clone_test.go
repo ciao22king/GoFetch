@@ -70,7 +70,7 @@ func TestCloneRepositoryEndToEnd(t *testing.T) {
 
 	parent := t.TempDir()
 	repo := repository{URL: "file://" + origin, Provider: "GitHub", Name: "cloned"}
-	cmd, cancel := cloneRepository(repo, parent, "", false, true, nil)
+	cmd, cancel := cloneRepository(repo, parent, "", false, true, 0, nil)
 	defer cancel()
 
 	msg := cmd()
@@ -86,7 +86,7 @@ func TestCloneRepositoryEndToEnd(t *testing.T) {
 	}
 
 	// A second clone into the same target must be refused without overwrite.
-	cmd2, cancel2 := cloneRepository(repo, parent, "", false, true, nil)
+	cmd2, cancel2 := cloneRepository(repo, parent, "", false, true, 0, nil)
 	defer cancel2()
 	msg2 := cmd2().(cloneResultMsg)
 	if msg2.err == nil {
@@ -119,7 +119,7 @@ func TestCloneRepositorySpecificBranch(t *testing.T) {
 
 	parent := t.TempDir()
 	repo := repository{URL: "file://" + origin, Provider: "GitHub", Name: "branchy"}
-	cmd, cancel := cloneRepository(repo, parent, "feature", false, true, nil)
+	cmd, cancel := cloneRepository(repo, parent, "feature", false, true, 0, nil)
 	defer cancel()
 
 	result := cmd().(cloneResultMsg)
@@ -150,7 +150,7 @@ func TestCloneRepositoryStreamsProgress(t *testing.T) {
 	repo := repository{URL: "file://" + origin, Provider: "GitHub", Name: "streamed"}
 	progress := make(chan string, 64)
 
-	cmd, cancel := cloneRepository(repo, parent, "", false, true, progress)
+	cmd, cancel := cloneRepository(repo, parent, "", false, true, 0, progress)
 	defer cancel()
 	done := make(chan struct{})
 	go func() { cmd(); close(done) }()
@@ -162,6 +162,44 @@ func TestCloneRepositoryStreamsProgress(t *testing.T) {
 		t.Fatal("clone finished without streaming any progress line")
 	}
 	<-done
+}
+
+func TestCloneRepositoryShallow(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	origin := t.TempDir()
+	runGit(t, origin, "init", "-q")
+	runGit(t, origin, "config", "user.email", "test@example.com")
+	runGit(t, origin, "config", "user.name", "GoFetch Test")
+	for i := 0; i < 3; i++ {
+		if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte(strings.Repeat("x", i+1)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, origin, "add", ".")
+		runGit(t, origin, "commit", "-q", "-m", "commit")
+	}
+
+	parent := t.TempDir()
+	repo := repository{URL: "file://" + origin, Provider: "GitHub", Name: "shallow"}
+	cmd, cancel := cloneRepository(repo, parent, "", false, true, 1, nil)
+	defer cancel()
+
+	result := cmd().(cloneResultMsg)
+	if result.err != nil {
+		t.Fatalf("cloneRepository(depth=1) error = %v", result.err)
+	}
+
+	// A depth-1 clone keeps exactly one commit in the local history.
+	count := exec.Command("git", "-C", filepath.Join(parent, "shallow"), "rev-list", "--count", "HEAD")
+	out, err := count.Output()
+	if err != nil {
+		t.Fatalf("git rev-list: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != "1" {
+		t.Fatalf("shallow clone has %s commits, want 1", strings.TrimSpace(string(out)))
+	}
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
