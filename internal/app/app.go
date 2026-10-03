@@ -56,6 +56,16 @@ type model struct {
 	progressChan chan string
 	progressLog  []string
 	cloneBranch  string
+
+	// depth is the shallow-clone depth chosen for the next clone (0 = full).
+	depth int
+	// remoteBranches caches the branch names advertised by the current
+	// repository's remote; branchCycling tracks Tab-completion position.
+	remoteBranches []string
+	branchCycling  int
+	// pendingPull is the target currently being updated with git pull, so the
+	// history screen can show that work is in progress.
+	pendingPull string
 }
 
 var (
@@ -130,6 +140,11 @@ type Options struct {
 	InitialDir    string
 	Version       string
 	NoBuild       bool
+	// Depth limits the clone to that many commits (0 = full clone).
+	Depth int
+	// Overwrite replaces an existing non-empty destination without asking.
+	// Only meaningful for headless runs; the TUI always asks first.
+	Overwrite bool
 }
 
 func Run(opts Options) error {
@@ -180,6 +195,8 @@ func newModel(opts Options) model {
 		initialBranch: opts.InitialBranch,
 		history:       loadHistory(),
 		noBuild:       opts.NoBuild,
+		depth:         opts.Depth,
+		branchCycling: -1,
 	}
 	m.refreshFilter()
 	switch {
@@ -309,6 +326,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Non riesco ad aprire la cartella: " + compactError(msg.err)
 		} else {
 			m.status = "Cartella aperta: " + msg.target
+		}
+		return m, nil
+	case branchesMsg:
+		// Discard stale answers: the user may have gone back and picked a
+		// different repository while ls-remote was still running.
+		if msg.err == nil && msg.url == m.repository.URL {
+			m.remoteBranches = msg.branches
+		}
+		return m, nil
+	case pullResultMsg:
+		m.pendingPull = ""
+		if msg.err != nil {
+			m.status = "Aggiornamento fallito: " + compactError(msg.err)
+		} else {
+			m.status = msg.summary
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -447,6 +479,14 @@ func (m model) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.history = loadHistory()
 		m.refreshFilter()
 		m.status = "Cronologia aggiornata."
+	case "u":
+		// Update the selected clone in place with a fast-forward pull.
+		if len(m.filtered) > 0 && m.pendingPull == "" {
+			entry := m.history[m.filtered[m.selected]]
+			m.pendingPull = entry.Target
+			m.status = "Aggiorno " + historyLabel(entry) + "…"
+			return m, pullRepository(entry.Target)
+		}
 	case "ctrl+l", "/":
 		m.searchActive = true
 		m.status = ""
@@ -496,7 +536,11 @@ func (m model) updateURL(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.urlInput.Blur()
 			m.branchInput.SetValue("")
 			m.branchInput.Focus()
-			return m, textinput.Blink
+			m.remoteBranches = nil
+			m.branchCycling = -1
+			// Warm the branch completion cache while the user reads the
+			// screen; failures are silent, Tab just has nothing to suggest.
+			return m, tea.Batch(textinput.Blink, fetchRemoteBranches(repo.URL))
 		}
 	}
 	var cmd tea.Cmd
@@ -530,7 +574,21 @@ func (m model) updateBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.suggestionIndex = -1
 			return m, textinput.Blink
 		}
+		if msg.Type == tea.KeyTab {
+			// Tab completes from the remote's branch list; pressing it again
+			// cycles through every match for the current prefix.
+			matches := branchCompletions(m.remoteBranches, m.branchInput.Value())
+			if len(matches) > 0 {
+				m.branchCycling = (m.branchCycling + 1) % len(matches)
+				m.branchInput.SetValue(matches[m.branchCycling])
+				m.branchInput.CursorEnd()
+			} else if len(m.remoteBranches) == 0 {
+				m.status = "Elenco branch non disponibile (repo privato o rete lenta)."
+			}
+			return m, nil
+		}
 	}
+	m.branchCycling = -1
 	var cmd tea.Cmd
 	m.branchInput, cmd = m.branchInput.Update(msg)
 	return m, cmd
@@ -551,9 +609,11 @@ func (m model) updateDestination(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if key.Matches(msg, appKeys.back) {
-			m.screen = urlScreen
+			// Back from the destination returns to the branch step, not all the
+			// way to the URL: the repository is still the one being cloned.
+			m.screen = branchScreen
 			m.dirInput.Blur()
-			m.urlInput.Focus()
+			m.branchInput.Focus()
 			m.err = nil
 			return m, textinput.Blink
 		}
@@ -578,6 +638,18 @@ func (m model) updateDestination(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if msg.String() == "s" {
+			// Toggle a shallow clone: only the latest commit is downloaded,
+			// which is dramatically faster on big repositories.
+			if m.depth > 0 {
+				m.depth = 0
+				m.status = "Clone completo: verrà scaricata tutta la storia."
+			} else {
+				m.depth = 1
+				m.status = "Clone shallow attivo: solo l'ultimo commit."
+			}
+			return m, nil
+		}
 	}
 	var cmd tea.Cmd
 	m.dirInput, cmd = m.dirInput.Update(msg)
@@ -592,7 +664,7 @@ func (m model) startClone(overwrite bool) (tea.Model, tea.Cmd) {
 	m.cloneBranch = strings.TrimSpace(m.branchInput.Value())
 	m.progressLog = nil
 	m.progressChan = make(chan string, 256)
-	cmd, cancel := cloneRepository(m.repository, m.dirInput.Value(), m.cloneBranch, overwrite, m.noBuild, m.progressChan)
+	cmd, cancel := cloneRepository(m.repository, m.dirInput.Value(), m.cloneBranch, overwrite, m.noBuild, m.depth, m.progressChan)
 	m.cancelClone = cancel
 	return m, tea.Batch(m.spinner.Tick, progressTick(), waitForProgress(m.progressChan), cmd)
 }
@@ -760,6 +832,9 @@ func (m model) viewBranch() string {
 	title := lipgloss.NewStyle().Foreground(ink).Bold(true).Render("Which branch?")
 	copy := subtitleStyle.Render("Optional: lascia vuoto per il branch predefinito del repository.")
 	repoBadge := lipgloss.NewStyle().Foreground(cyan).Bold(true).Render(m.repository.Provider + "  ·  " + m.repository.Name)
+	if len(m.remoteBranches) > 0 {
+		repoBadge += lipgloss.NewStyle().Foreground(muted).Render(fmt.Sprintf("  ·  %d branch disponibili (tab per completare)", len(m.remoteBranches)))
+	}
 	field := cardStyle.Render(
 		lipgloss.JoinVertical(lipgloss.Left,
 			repoBadge,
@@ -781,6 +856,13 @@ func (m model) viewDestination() string {
 		branch = "predefinito"
 	}
 	badge := repoBadge + lipgloss.NewStyle().Foreground(muted).Render("   branch: "+branch)
+	if m.depth > 0 {
+		badge += "  " + lipgloss.NewStyle().
+			Foreground(cyan).
+			Background(lipgloss.Color("#1E293B")).
+			Padding(0, 1).
+			Render(fmt.Sprintf("SHALLOW depth=%d", m.depth))
+	}
 
 	// Destination preview: show exactly where git will write before the clone
 	// starts, so an absolute target can never surprise the user.
@@ -814,6 +896,9 @@ func (m model) viewCloning() string {
 	target := m.repository.Provider + "  ·  " + m.repository.Name
 	if m.cloneBranch != "" {
 		target += "  ·  " + m.cloneBranch
+	}
+	if m.depth > 0 {
+		target += fmt.Sprintf("  ·  shallow depth=%d", m.depth)
 	}
 	status := lipgloss.NewStyle().Foreground(cyan).Render(m.spinner.View() + "  clone + build automatici in corso…")
 	timer := helpStyle.Render(fmt.Sprintf("elapsed %s   •   esc per annullare", elapsed))
@@ -874,13 +959,13 @@ func (m model) viewStatus() string {
 func (m model) viewFooter() string {
 	switch m.screen {
 	case historyScreen:
-		return helpStyle.Render("↑/↓ scegli   •   enter apri   •   n nuovo   •   / cerca   •   ctrl+d rimuovi   •   q esci")
+		return helpStyle.Render("↑/↓ scegli   •   enter apri   •   u aggiorna   •   n nuovo   •   / cerca   •   ctrl+d rimuovi   •   q esci")
 	case urlScreen:
 		return helpStyle.Render("ctrl+v incolla   •   enter continua   •   esc indietro   •   ctrl+c esci")
 	case branchScreen:
-		return helpStyle.Render("invio lascia vuoto per il predefinito   •   ctrl+v incolla   •   enter continua   •   esc indietro")
+		return helpStyle.Render("tab completa dal remote   •   vuoto = predefinito   •   enter continua   •   esc indietro")
 	case destinationScreen:
-		return helpStyle.Render("ctrl+v incolla   •   tab suggerimento   •   enter clona   •   esc indietro")
+		return helpStyle.Render("ctrl+v incolla   •   tab suggerimento   •   s shallow   •   enter clona   •   esc indietro")
 	case cloningScreen:
 		return helpStyle.Render("attendi   •   esc annulla")
 	case resultScreen:
@@ -910,18 +995,4 @@ func compactError(err error) string {
 		return message[:157] + "..."
 	}
 	return message
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
